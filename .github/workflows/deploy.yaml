@@ -14,7 +14,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
       - name: Build and Publish head Docker image
-        uses: VaultVulp/gp-docker-action@v2.5.0
+        uses: VaultVulp/gp-docker-action@1.6.0
         with:
           github-token: ${{ secrets.PACKAGE_TOKEN }}
           image-name: develop
