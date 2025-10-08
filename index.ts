@@ -9,6 +9,7 @@ const SYMBOL = 'SUI-USDT-SWAP'
 const INST_TYPE = 'SWAP'
 const UNDERLYING = 'SUI-USDT'
 const RUBIK_INST_TYPE = INST_TYPE === 'SWAP' ? 'CONTRACTS' : INST_TYPE
+const RUBIK_CONTRACT_CCY = UNDERLYING.split('-')[0]
 const api = axios.create({ baseURL: BASE_URL })
 
 async function getFunding() {
@@ -26,7 +27,7 @@ async function getLongShortRatio() {
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 404) {
       const { data } = await api.get('/api/v5/rubik/stat/contracts/long-short-account-ratio', {
-        params: { instType: INST_TYPE, ccy: UNDERLYING, period: '5m' }
+        params: { instType: RUBIK_INST_TYPE, ccy: RUBIK_CONTRACT_CCY, period: '5m' }
       })
       const last = data.data.at(-1)
       const ratio = last?.longShortRatio ?? last?.ratio ?? last?.value
