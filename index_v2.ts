@@ -1,4 +1,5 @@
 import axios from "axios";
+import moment from "moment";
 
 const API_BASE = "https://www.okx.com";
 const UNDERLYING = "SUI-USDT";
@@ -203,24 +204,30 @@ async function sendTelegram(message: string) {
   });
 }
 
-// ========== MAIN ==========
+let lastSend: moment.Moment | null = null;
 async function main() {
   const setup = await getTradeSetup();
 
   console.table(setup);
 
   if (setup.signal !== "WAIT") {
+    const now = moment();
     const msg = `
 🦈 <b>SUI Futures x50 Alert</b>
-Signal: <b>${setup.signal}</b>
-Entry: ${setup.entry?.toFixed(4)}
-TP: ${setup.tp?.toFixed(4)}
-SL: ${setup.sl?.toFixed(4)}
-R:R ≈ ${setup.rr?.toFixed(2)}
-Comment: ${setup.comment}
-Time: ${new Date().toLocaleString("vi-VN")}
-`;
+      Signal: <b>${setup.signal}</b>
+      Entry: ${setup.entry?.toFixed(4)}
+      TP: ${setup.tp?.toFixed(4)}
+      SL: ${setup.sl?.toFixed(4)}
+      R:R ≈ ${setup.rr?.toFixed(2)}
+      Comment: ${setup.comment}
+      Time: ${new Date().toLocaleString("vi-VN")}
+    `;
+    if (lastSend && now.diff(lastSend, 'minutes') < 15) {
+      return;
+    }
+    
     await sendTelegram(msg);
+    lastSend = now;
     console.log("🚨 Gửi tín hiệu tới Telegram thành công!");
   } else {
     console.log("⏳ Chưa có tín hiệu trade hợp lệ.");
