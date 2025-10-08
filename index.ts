@@ -56,7 +56,13 @@ async function getTakerFlow() {
 
 async function getLiquidations() {
   const { data } = await api.get('/api/v5/public/liquidation-orders', {
-    params: { uly: UNDERLYING, instType: INST_TYPE, type: 'filled', limit: 100 }
+    params: {
+      uly: UNDERLYING,
+      instType: INST_TYPE,
+      state: 'filled',
+      type: 'filled',
+      limit: 100
+    }
   })
   const longs = data.data.filter(x => x.posSide === 'long')
   const shorts = data.data.filter(x => x.posSide === 'short')
