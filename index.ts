@@ -63,8 +63,8 @@ async function getTakerFlow() {
         params: { instType: RUBIK_INST_TYPE, ccy: RUBIK_CONTRACT_CCY, period: '5m' }
       })
       const last = data.data.at(-1)
-      const buy = last?.buyVolUsd ?? last?.buyVol ?? last?.buyUsd
-      const sell = last?.sellVolUsd ?? last?.sellVol ?? last?.sellUsd
+      const buy = Array.isArray(last) ? last[1] : last?.buyVolUsd ?? last?.buyVol ?? last?.buyUsd
+      const sell = Array.isArray(last) ? last[2] : last?.sellVolUsd ?? last?.sellVol ?? last?.sellUsd
       if (buy === undefined || sell === undefined) {
         throw new Error('Không tìm được dữ liệu taker volume từ OKX (rubik).')
       }
