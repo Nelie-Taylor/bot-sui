@@ -8,6 +8,8 @@ const BASE_URL = 'https://www.okx.com'
 const SYMBOL = 'SUI-USDT-SWAP'
 const INST_TYPE = 'SWAP'
 const UNDERLYING = 'SUI-USDT'
+const RUBIK_INST_TYPE = INST_TYPE === 'SWAP' ? 'CONTRACTS' : INST_TYPE
+const RUBIK_CONTRACT_CCY = UNDERLYING.split('-')[0]
 const api = axios.create({ baseURL: BASE_URL })
 
 async function getFunding() {
@@ -16,11 +18,28 @@ async function getFunding() {
 }
 
 async function getLongShortRatio() {
-  const { data } = await api.get('/api/v5/public/account-ratio', {
-    params: { uly: UNDERLYING, instType: INST_TYPE, period: '5m' }
-  })
-  const last = data.data.at(-1)
-  return Number(last.longShortRatio)
+  try {
+    const { data } = await api.get('/api/v5/public/account-ratio', {
+      params: { uly: UNDERLYING, instType: INST_TYPE, period: '5m' }
+    })
+    const last = data.data.at(-1)
+    return Number(last.longShortRatio)
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      const { data } = await api.get('/api/v5/rubik/stat/contracts/long-short-account-ratio', {
+        params: { instType: RUBIK_INST_TYPE, ccy: RUBIK_CONTRACT_CCY, period: '5m' }
+      })
+      const last = data.data.at(-1)
+      const ratio = Array.isArray(last)
+        ? last[1]
+        : last?.longShortRatio ?? last?.ratio ?? last?.value
+      if (ratio === undefined) {
+        throw new Error('Không tìm được dữ liệu long/short ratio từ OKX (rubik).')
+      }
+      return Number(ratio)
+    }
+    throw error
+  }
 }
 
 async function getOI() {
@@ -31,17 +50,39 @@ async function getOI() {
 }
 
 async function getTakerFlow() {
-  const { data } = await api.get('/api/v5/public/taker-volume', {
-    params: { uly: UNDERLYING, instType: INST_TYPE, period: '5m' }
-  })
-  const last = data.data.at(-1)
-  const delta = Number(last.buyVolUsd) - Number(last.sellVolUsd)
-  return delta
+  try {
+    const { data } = await api.get('/api/v5/public/taker-volume', {
+      params: { uly: UNDERLYING, instType: INST_TYPE, period: '5m' }
+    })
+    const last = data.data.at(-1)
+    const delta = Number(last.buyVolUsd) - Number(last.sellVolUsd)
+    return delta
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      const { data } = await api.get('/api/v5/rubik/stat/taker-volume', {
+        params: { instType: RUBIK_INST_TYPE, ccy: RUBIK_CONTRACT_CCY, period: '5m' }
+      })
+      const last = data.data.at(-1)
+      const buy = Array.isArray(last) ? last[1] : last?.buyVolUsd ?? last?.buyVol ?? last?.buyUsd
+      const sell = Array.isArray(last) ? last[2] : last?.sellVolUsd ?? last?.sellVol ?? last?.sellUsd
+      if (buy === undefined || sell === undefined) {
+        throw new Error('Không tìm được dữ liệu taker volume từ OKX (rubik).')
+      }
+      return Number(buy) - Number(sell)
+    }
+    throw error
+  }
 }
 
 async function getLiquidations() {
   const { data } = await api.get('/api/v5/public/liquidation-orders', {
-    params: { uly: UNDERLYING, instType: INST_TYPE, type: 'filled', limit: 100 }
+    params: {
+      uly: UNDERLYING,
+      instType: INST_TYPE,
+      state: 'filled',
+      type: 'filled',
+      limit: 100
+    }
   })
   const longs = data.data.filter(x => x.posSide === 'long')
   const shorts = data.data.filter(x => x.posSide === 'short')
