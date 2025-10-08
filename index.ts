@@ -8,6 +8,7 @@ const BASE_URL = 'https://www.okx.com'
 const SYMBOL = 'SUI-USDT-SWAP'
 const INST_TYPE = 'SWAP'
 const UNDERLYING = 'SUI-USDT'
+const RUBIK_INST_TYPE = INST_TYPE === 'SWAP' ? 'CONTRACTS' : INST_TYPE
 const api = axios.create({ baseURL: BASE_URL })
 
 async function getFunding() {
@@ -56,7 +57,7 @@ async function getTakerFlow() {
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 404) {
       const { data } = await api.get('/api/v5/rubik/stat/taker-volume', {
-        params: { instType: INST_TYPE, ccy: UNDERLYING, period: '5m' }
+        params: { instType: RUBIK_INST_TYPE, ccy: UNDERLYING, period: '5m' }
       })
       const last = data.data.at(-1)
       const buy = last?.buyVolUsd ?? last?.buyVol ?? last?.buyUsd
