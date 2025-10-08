@@ -60,7 +60,7 @@ async function getTakerFlow() {
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 404) {
       const { data } = await api.get('/api/v5/rubik/stat/taker-volume', {
-        params: { instType: RUBIK_INST_TYPE, ccy: UNDERLYING, period: '5m' }
+        params: { instType: RUBIK_INST_TYPE, ccy: RUBIK_CONTRACT_CCY, period: '5m' }
       })
       const last = data.data.at(-1)
       const buy = last?.buyVolUsd ?? last?.buyVol ?? last?.buyUsd
