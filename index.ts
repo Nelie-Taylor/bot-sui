@@ -1,175 +1,167 @@
-import 'dotenv/config'
-import axios from 'axios'
-import chalk from 'chalk'
-import ora from 'ora'
-import { table } from 'table'
+/**
+ * SUI Futures Signal Generator (No Funding Version)
+ * --------------------------------------------------
+ * Logic:
+ * 1. Lấy dữ liệu Whale Index, OI, CVD, Liquidations từ OKX.
+ * 2. Xác định tín hiệu dựa trên tương quan:
+ *    - Whale giảm + OI tăng → Short bias
+ *    - Whale tăng + OI tăng → Long bias
+ *    - Sau đó, xác nhận entry bằng CVD đảo hướng gần vùng heatmap thanh lý.
+ */
 
-const BASE_URL = 'https://www.okx.com'
-const SYMBOL = 'SUI-USDT-SWAP'
-const INST_TYPE = 'SWAP'
-const UNDERLYING = 'SUI-USDT'
-const RUBIK_INST_TYPE = INST_TYPE === 'SWAP' ? 'CONTRACTS' : INST_TYPE
-const RUBIK_CONTRACT_CCY = UNDERLYING.split('-')[0]
-const api = axios.create({ baseURL: BASE_URL })
+import axios from "axios";
 
-async function getFunding() {
-  const { data } = await api.get('/api/v5/public/funding-rate', { params: { instId: SYMBOL } })
-  return Number(data.data[0].fundingRate)
+const API_BASE = "https://www.okx.com";
+const UNDERLYING = "SUI-USDT";
+const INST_TYPE = "SWAP";
+
+interface SignalResult {
+  timestamp: string;
+  whaleTrend: "increasing" | "decreasing" | "neutral";
+  oiTrend: "increasing" | "decreasing" | "neutral";
+  cvdSignal: "bullish" | "bearish" | "neutral";
+  liquidationBias: "long_liq" | "short_liq" | "none";
+  signal: "LONG" | "SHORT" | "WAIT";
+  comment: string;
 }
 
-async function getLongShortRatio() {
-  try {
-    const { data } = await api.get('/api/v5/public/account-ratio', {
-      params: { uly: UNDERLYING, instType: INST_TYPE, period: '5m' }
-    })
-    const last = data.data.at(-1)
-    return Number(last.longShortRatio)
-  } catch (error) {
-    if (axios.isAxiosError(error) && error.response?.status === 404) {
-      const { data } = await api.get('/api/v5/rubik/stat/contracts/long-short-account-ratio', {
-        params: { instType: RUBIK_INST_TYPE, ccy: RUBIK_CONTRACT_CCY, period: '5m' }
-      })
-      const last = data.data.at(-1)
-      const ratio = Array.isArray(last)
-        ? last[1]
-        : last?.longShortRatio ?? last?.ratio ?? last?.value
-      if (ratio === undefined) {
-        throw new Error('Không tìm được dữ liệu long/short ratio từ OKX (rubik).')
-      }
-      return Number(ratio)
-    }
-    throw error
+// --- Utility ---
+function calcTrend(values: number[]): "increasing" | "decreasing" | "neutral" {
+  if (values.length < 2) return "neutral";
+  const diff = values[values.length - 1] - values[values.length - 2];
+  if (diff > 0) return "increasing";
+  if (diff < 0) return "decreasing";
+  return "neutral";
+}
+async function getWhaleTrend(): Promise<"increasing" | "decreasing" | "neutral"> {
+    const [oiRes, candleRes, liqRes] = await Promise.all([
+      axios.get(`${API_BASE}/api/v5/public/open-interest`, {
+        params: { instType: INST_TYPE, uly: UNDERLYING },
+      }),
+      axios.get(`${API_BASE}/api/v5/market/history-candles`, {
+        params: { instId: `${UNDERLYING}-SWAP`, bar: "15m", limit: 5 },
+      }),
+      axios.get(`${API_BASE}/api/v5/public/liquidation-orders`, {
+        params: { uly: UNDERLYING, instType: INST_TYPE, state: "filled", limit: 100 },
+      }),
+    ]);
+  
+    const oiArr = oiRes.data.data.slice(-5).map((x: any) => parseFloat(x.oi));
+    const candles = candleRes.data.data.slice(-5).map((x: any) => ({
+      open: parseFloat(x[1]),
+      close: parseFloat(x[4]),
+    }));
+  
+    const longs = liqRes.data.data.filter((x: any) => x.posSide === "long").length;
+    const shorts = liqRes.data.data.filter((x: any) => x.posSide === "short").length;
+  
+    const oiTrend =
+      oiArr[oiArr.length - 1] > oiArr[oiArr.length - 2] ? "increasing" : "decreasing";
+    const priceTrend =
+      candles[0].close < candles[candles.length - 1].close ? "up" : "down";
+    const liqBias = longs > shorts * 1.5 ? "long_liq" : shorts > longs * 1.5 ? "short_liq" : "none";
+  
+    // --- Whale Trend Logic ---
+    if (priceTrend === "up" && oiTrend === "increasing" && liqBias === "short_liq")
+      return "increasing"; // Whale đang gom
+    if (priceTrend === "down" && oiTrend === "increasing" && liqBias === "long_liq")
+      return "decreasing"; // Whale đang xả
+    return "neutral";
   }
+  
+async function getOpenInterest(): Promise<number[]> {
+  const { data } = await axios.get(`${API_BASE}/api/v5/public/open-interest`, {
+    params: { instType: INST_TYPE, uly: UNDERLYING },
+  });
+  return data.data.slice(-5).map((x: any) => parseFloat(x.oi));
 }
 
-async function getOI() {
-  const { data } = await api.get('/api/v5/public/open-interest', {
-    params: { uly: UNDERLYING, instType: INST_TYPE }
-  })
-  return Number(data.data[0].oi)
-}
-
-async function getTakerFlow() {
-  try {
-    const { data } = await api.get('/api/v5/public/taker-volume', {
-      params: { uly: UNDERLYING, instType: INST_TYPE, period: '5m' }
-    })
-    const last = data.data.at(-1)
-    const delta = Number(last.buyVolUsd) - Number(last.sellVolUsd)
-    return delta
-  } catch (error) {
-    if (axios.isAxiosError(error) && error.response?.status === 404) {
-      const { data } = await api.get('/api/v5/rubik/stat/taker-volume', {
-        params: { instType: RUBIK_INST_TYPE, ccy: RUBIK_CONTRACT_CCY, period: '5m' }
-      })
-      const last = data.data.at(-1)
-      const buy = Array.isArray(last) ? last[1] : last?.buyVolUsd ?? last?.buyVol ?? last?.buyUsd
-      const sell = Array.isArray(last) ? last[2] : last?.sellVolUsd ?? last?.sellVol ?? last?.sellUsd
-      if (buy === undefined || sell === undefined) {
-        throw new Error('Không tìm được dữ liệu taker volume từ OKX (rubik).')
-      }
-      return Number(buy) - Number(sell)
+async function getCVD(): Promise<number[]> {
+    const { data } = await axios.get(`${API_BASE}/api/v5/market/history-trades`, {
+      params: { instId: `${UNDERLYING}-SWAP`, limit: 200 },
+    });
+  
+    // CVD = cumulative (buyVol - sellVol)
+    const cvd: number[] = [];
+    let cum = 0;
+  
+    // newest -> oldest => đảo ngược
+    for (const x of data.data.reverse()) {
+      const size = parseFloat(x.sz);
+      cum += x.side === "buy" ? size : -size;
+      cvd.push(cum);
     }
-    throw error
+    return cvd;
   }
+
+async function getLiquidationBias(): Promise<"long_liq" | "short_liq" | "none"> {
+  const { data } = await axios.get(`${API_BASE}/api/v5/public/liquidation-orders`, {
+    params: { uly: UNDERLYING, instType: INST_TYPE, state: "filled", limit: 100 },
+  });
+  const longs = data.data.filter((x: any) => x.posSide === "long").length;
+  const shorts = data.data.filter((x: any) => x.posSide === "short").length;
+  if (longs > shorts * 1.5) return "long_liq";
+  if (shorts > longs * 1.5) return "short_liq";
+  return "none";
 }
 
-async function getLiquidations() {
-  const { data } = await api.get('/api/v5/public/liquidation-orders', {
-    params: {
-      uly: UNDERLYING,
-      instType: INST_TYPE,
-      state: 'filled',
-      type: 'filled',
-      limit: 100
-    }
-  })
-  const longs = data.data.filter(x => x.posSide === 'long')
-  const shorts = data.data.filter(x => x.posSide === 'short')
-  return { longCount: longs.length, shortCount: shorts.length }
-}
-
-async function getPrice() {
-  const { data } = await api.get('/api/v5/market/ticker', { params: { instId: SYMBOL } })
-  return Number(data.data[0].last)
-}
-
-function colorBool(ok) {
-  return ok ? chalk.green('✅') : chalk.red('❌')
-}
-
-async function run() {
-  const spin = ora(`Đang lấy dữ liệu ${SYMBOL} từ OKX...`).start()
-
+// --- Decision Engine ---
+export async function getSignal(): Promise<SignalResult> {
   try {
-    const [funding, ratio, oi, taker, liq, price] = await Promise.all([
-      getFunding(),
-      getLongShortRatio(),
-      getOI(),
-      getTakerFlow(),
-      getLiquidations(),
-      getPrice()
-    ])
+    const [oiArr, cvdArr, liqBias] = await Promise.all([
+      getOpenInterest(),
+      getCVD(),
+      getLiquidationBias(),
+    ]);
 
-    spin.succeed('Đã lấy dữ liệu thành công.')
-    const fundPct = funding * 100
+    const whaleTrend = await getWhaleTrend();
+    const oiTrend = calcTrend(oiArr);
 
-    // ====== PHÂN TÍCH ======
-    const fundingLongBias = fundPct > 0.01
-    const fundingShortBias = fundPct < -0.01
-    const ratioLongBias = ratio > 1
-    const ratioShortBias = ratio < 1
-    const takerBuy = taker > 0
-    const takerSell = taker < 0
+    // CVD direction (buy pressure)
+    const cvdChange = cvdArr[cvdArr.length - 1] - cvdArr[cvdArr.length - 2];
+    const cvdSignal = cvdChange > 0 ? "bullish" : cvdChange < 0 ? "bearish" : "neutral";
 
-    let signal = 'WAIT'
-    let direction = '-'
-    let reason = ''
-    let entry = price
-    let sl, tp
+    let signal: SignalResult["signal"] = "WAIT";
+    let comment = "Chưa có setup rõ ràng.";
 
-    if (fundingLongBias && ratioLongBias && takerSell) {
-      signal = 'READY'
-      direction = 'SHORT'
-      reason = 'Funding và Retail Long đông, Taker đang bán → trap Long.'
-      tp = (price * 0.98).toFixed(4)
-      sl = (price * 1.01).toFixed(4)
-    } else if (fundingShortBias && ratioShortBias && takerBuy) {
-      signal = 'READY'
-      direction = 'LONG'
-      reason = 'Funding âm, Retail Short đông, Taker mua → trap Short.'
-      tp = (price * 1.02).toFixed(4)
-      sl = (price * 0.99).toFixed(4)
-    } else {
-      reason = 'Chưa đủ điều kiện lệch pha rõ ràng.'
+    // ---- Logic ra tín hiệu ----
+    if (whaleTrend === "decreasing" && oiTrend === "increasing") {
+      // Cá voi bán, OI tăng → retail đang long, trap short
+      if (cvdSignal === "bearish" || liqBias === "long_liq") {
+        signal = "SHORT";
+        comment = "Whale giảm + OI tăng + CVD âm → ưu tiên SHORT.";
+      }
     }
 
-    // ====== BẢNG TÓM TẮT ======
-    const rows = [
-      ['Funding Rate', `${fundPct.toFixed(3)}%`, fundingLongBias ? 'Retail Long đông' : fundingShortBias ? 'Retail Short đông' : 'Trung tính'],
-      ['Long/Short Ratio', ratio.toFixed(2), ratio > 1 ? 'Nghiêng Long' : 'Nghiêng Short'],
-      ['Open Interest', oi.toLocaleString(), 'Tổng vị thế mở'],
-      ['Taker Flow (Δ USD)', taker.toFixed(0), taker > 0 ? 'Buy áp đảo' : 'Sell áp đảo'],
-      ['Liquidations', `${liq.longCount} Long | ${liq.shortCount} Short`, 'Thanh lý gần nhất'],
-      ['Giá hiện tại', price, '-'],
-    ]
-
-    console.log(table(rows))
-
-    console.log(chalk.bold(`Tín hiệu: ${signal === 'READY' ? chalk.green(signal) : chalk.yellow(signal)}`))
-    console.log(chalk.bold(`Chiều: ${direction}`))
-    console.log(chalk.cyan(reason))
-
-    if (signal === 'READY') {
-      console.log(chalk.green(`→ Entry: ${price}`))
-      console.log(chalk.red(`→ Stop Loss: ${sl}`))
-      console.log(chalk.yellow(`→ Take Profit: ${tp}`))
+    if (whaleTrend === "increasing" && oiTrend === "increasing") {
+      // Cá voi mua, OI tăng → retail short, trap long
+      if (cvdSignal === "bullish" || liqBias === "short_liq") {
+        signal = "LONG";
+        comment = "Whale tăng + OI tăng + CVD dương → ưu tiên LONG.";
+      }
     }
 
+    if (whaleTrend === "neutral" || oiTrend === "neutral") {
+      signal = "WAIT";
+      comment = "Chưa có sự lệch pha rõ giữa cá voi và OI.";
+    }
+
+    return {
+      timestamp: new Date().toISOString(),
+      whaleTrend,
+      oiTrend,
+      cvdSignal,
+      liquidationBias: liqBias,
+      signal,
+      comment,
+    };
   } catch (err) {
-    spin.fail('Lỗi khi lấy dữ liệu:')
-    console.error(err)
+    console.error("Error fetching data:", err);
+    throw err;
   }
 }
 
-run()
+setInterval(() => {
+    console.clear();
+    getSignal().then((res) => console.table(res));
+}, 60000)
