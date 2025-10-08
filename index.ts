@@ -6,6 +6,8 @@ import { table } from 'table'
 
 const BASE_URL = 'https://www.okx.com'
 const SYMBOL = 'SUI-USDT-SWAP'
+const INST_TYPE = 'SWAP'
+const UNDERLYING = 'SUI-USDT'
 const api = axios.create({ baseURL: BASE_URL })
 
 async function getFunding() {
@@ -15,20 +17,22 @@ async function getFunding() {
 
 async function getLongShortRatio() {
   const { data } = await api.get('/api/v5/public/account-ratio', {
-    params: { instId: SYMBOL, period: '5m' }
+    params: { uly: UNDERLYING, instType: INST_TYPE, period: '5m' }
   })
   const last = data.data.at(-1)
   return Number(last.longShortRatio)
 }
 
 async function getOI() {
-  const { data } = await api.get('/api/v5/public/open-interest', { params: { instId: SYMBOL } })
+  const { data } = await api.get('/api/v5/public/open-interest', {
+    params: { uly: UNDERLYING, instType: INST_TYPE }
+  })
   return Number(data.data[0].oi)
 }
 
 async function getTakerFlow() {
   const { data } = await api.get('/api/v5/public/taker-volume', {
-    params: { instId: SYMBOL, period: '5m' }
+    params: { uly: UNDERLYING, instType: INST_TYPE, period: '5m' }
   })
   const last = data.data.at(-1)
   const delta = Number(last.buyVolUsd) - Number(last.sellVolUsd)
@@ -37,7 +41,7 @@ async function getTakerFlow() {
 
 async function getLiquidations() {
   const { data } = await api.get('/api/v5/public/liquidation-orders', {
-    params: { instId: SYMBOL, type: 'filled', limit: 100 }
+    params: { uly: UNDERLYING, instType: INST_TYPE, type: 'filled', limit: 100 }
   })
   const longs = data.data.filter(x => x.posSide === 'long')
   const shorts = data.data.filter(x => x.posSide === 'short')
