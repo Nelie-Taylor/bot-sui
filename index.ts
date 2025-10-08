@@ -46,12 +46,28 @@ async function getOI() {
 }
 
 async function getTakerFlow() {
-  const { data } = await api.get('/api/v5/public/taker-volume', {
-    params: { uly: UNDERLYING, instType: INST_TYPE, period: '5m' }
-  })
-  const last = data.data.at(-1)
-  const delta = Number(last.buyVolUsd) - Number(last.sellVolUsd)
-  return delta
+  try {
+    const { data } = await api.get('/api/v5/public/taker-volume', {
+      params: { uly: UNDERLYING, instType: INST_TYPE, period: '5m' }
+    })
+    const last = data.data.at(-1)
+    const delta = Number(last.buyVolUsd) - Number(last.sellVolUsd)
+    return delta
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      const { data } = await api.get('/api/v5/rubik/stat/taker-volume', {
+        params: { instType: INST_TYPE, ccy: UNDERLYING, period: '5m' }
+      })
+      const last = data.data.at(-1)
+      const buy = last?.buyVolUsd ?? last?.buyVol ?? last?.buyUsd
+      const sell = last?.sellVolUsd ?? last?.sellVol ?? last?.sellUsd
+      if (buy === undefined || sell === undefined) {
+        throw new Error('Không tìm được dữ liệu taker volume từ OKX (rubik).')
+      }
+      return Number(buy) - Number(sell)
+    }
+    throw error
+  }
 }
 
 async function getLiquidations() {
