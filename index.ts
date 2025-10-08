@@ -30,7 +30,9 @@ async function getLongShortRatio() {
         params: { instType: RUBIK_INST_TYPE, ccy: RUBIK_CONTRACT_CCY, period: '5m' }
       })
       const last = data.data.at(-1)
-      const ratio = last?.longShortRatio ?? last?.ratio ?? last?.value
+      const ratio = Array.isArray(last)
+        ? last[1]
+        : last?.longShortRatio ?? last?.ratio ?? last?.value
       if (ratio === undefined) {
         throw new Error('Không tìm được dữ liệu long/short ratio từ OKX (rubik).')
       }
